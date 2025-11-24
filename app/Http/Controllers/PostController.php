@@ -9,11 +9,13 @@ use App\Models\Post;
 use App\Models\Comment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class PostController extends Controller
 {
     private $responseApi;
+
     public function __construct()
     {
         $this->responseApi = new ResponseApi();
@@ -31,7 +33,7 @@ class PostController extends Controller
     {
         try {
             $param = $request->all();
-            $list_post = Post::join('users', 'users.id', '=', 'posts.user_id')
+            $listPost = Post::join('users', 'users.id', '=', 'posts.user_id')
                 ->select(
                     'posts.id',
                     'posts.user_id',
@@ -45,14 +47,21 @@ class PostController extends Controller
                 )
                 ->orderBy('posts.created_at', 'desc')
                 ->get();
-
-            return $this->responseApi->success($list_post);
+            return $this->responseApi->success($listPost);
         } catch (\Throwable $th) {
             Log::error($th);
             return $this->responseApi->internalServerError();
         }
     }
 
+    /**
+     * Create a new post
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     *
+     * @throws \Throwable
+     */
     public function addPost(Request $request)
     {
         try {
@@ -74,8 +83,7 @@ class PostController extends Controller
                 // URL trả về
                 $thumbnailUrl = url('uploads/posts/' . $filename);
             }
-
-            $post = Post::create([
+            $createPost = Post::create([
                 // 'user_id' => $request->user_id,
                 'user_id' => Auth::user()->id ?? $param['user_id'],
                 'caption' => $request->caption ? $request->caption : '',
@@ -85,8 +93,8 @@ class PostController extends Controller
             ]);
 
             return $this->responseApi->success([
-                'message' => 'Post created successfully!',
-                'post'    => $post
+                'message' => __('message.post_saved_successfully'),
+                'post'    => $createPost
             ]);
         } catch (\Throwable $th) {
             Log::error($th);
@@ -94,43 +102,65 @@ class PostController extends Controller
         }
     }
 
+    /**
+     * Delete post by id
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     * 
+     * @throws \Throwable
+     */
     public function deletePost(Request $request)
     {
-        $post = Post::find($request->id);
+        try {
+            $post = Post::find($request->id);
+            if (!$post) {
+                return $this->responseApi->dataNotFound();
+            }
+            DB::beginTransaction();
+            // Xóa file thumbnail nếu có
+            if ($post->thumbnail_url) {
+                $filePath = public_path(str_replace(url('/') . '/', '', $post->thumbnail_url));
+                if (file_exists($filePath)) {
+                    unlink($filePath);
+                }
+            }
+            // Xóa liên quan
+            $post->comments()->delete();
+            $post->likes()->delete();
+            $post->favourites()->delete();
+            $post->delete();
 
-        if (!$post) {
-            return $this->responseApi->dataNotFound("Post not found", 404);
+            DB::commit();
+            return $this->responseApi->success([
+                'message' => __('message.post_deleted_successfully')
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Delete Post Error: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return $this->responseApi->internalServerError();
         }
-
-        // Xóa file thumbnail nếu có
-        if ($post->thumbnail_url) {
-            $filePath = public_path(str_replace(url('/') . '/', '', $post->thumbnail_url));
-            if (file_exists($filePath)) unlink($filePath);
-        }
-
-        // Xóa liên quan
-        $post->comments()->delete();
-        $post->likes()->delete();
-        $post->favourites()->delete();
-
-        $post->delete();
-
-        return $this->responseApi->success([
-            'message' => 'Post deleted successfully!'
-        ]);
     }
 
+    /**
+     * Like/Unlike a post by user id and post id.
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     * 
+     * @throws \Throwable
+     */
     public function likePost(Request $request)
     {
         try {
             $userId = Auth::id() ?? $request->user_id;
-            // $userId = 2;
             $postId = $request->post_id;
             $post = Post::find($postId);
-            // Log::info($post);
-
             if (!$post) {
-                return $this->responseApi->dataNotFound('Post not found', 404);
+                return $this->responseApi->dataNotFound();
             }
 
             $like = LikePost::where('user_id', $userId)
@@ -143,7 +173,7 @@ class PostController extends Controller
                 $post->save();
 
                 return $this->responseApi->success([
-                    'message' => 'Post unliked successfully!',
+                    'message' => __('message.post_unliked_successfully'),
                     'total_like' => $post->total_like
                 ]);
             } else {
@@ -157,7 +187,7 @@ class PostController extends Controller
                 $post->save();
 
                 return $this->responseApi->success([
-                    'message' => 'Post liked successfully!',
+                    'message' => __('message.post_liked_successfully'),
                     'total_like' => $post->total_like
                 ]);
             }
@@ -167,16 +197,23 @@ class PostController extends Controller
         }
     }
 
+    /**
+     * Save/Unsave a post by user id and post id.
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     * 
+     * @throws \Throwable
+     */
     public function savePost(Request $request)
     {
         try {
             $userId = Auth::id() ?? $request->user_id;
-            // $userId = 2;
             $postId = $request->post_id;
 
             $post = Post::find($postId);
             if (!$post) {
-                return $this->responseApi->dataNotFound('Post not found', 404);
+                return $this->responseApi->dataNotFound();
             }
 
             // Kiểm tra user đã save chưa
@@ -189,7 +226,7 @@ class PostController extends Controller
                 $favourite->delete();
 
                 return $this->responseApi->success([
-                    'message' => 'Post removed from favourites',
+                    'message' => __('message.post_removed_from_favourites'),
                     'saved' => false
                 ]);
             } else {
@@ -200,7 +237,7 @@ class PostController extends Controller
                 ]);
 
                 return $this->responseApi->success([
-                    'message' => 'Post saved successfully',
+                    'message' => __('message.post_saved'),
                     'saved' => true
                 ]);
             }
@@ -210,74 +247,99 @@ class PostController extends Controller
         }
     }
 
+    /**
+     * Get all posts by user id.
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     *
+     * @throws \Throwable
+     */
     public function myPost(Request $request)
     {
         try {
             $userId = Auth::id() ?? $request->user_id;
-            // $userId = 2;
-            $list_post = Post::with('user')
-                ->where('user_id', $userId)
-                ->orderBy('created_at', 'desc')
-                ->get()
-                ->map(function ($post) {
-                    return [
-                        'id' => $post->id,
-                        'user_id' => $post->user_id,
-                        'caption' => $post->caption,
-                        'thumbnail_url' => $post->thumbnail_url,
-                        'total_like' => $post->total_like,
-                        'total_comment' => $post->total_comment,
-                        'created_at' => $post->created_at->format('Y-m-d H:i:s'),
-                        'author_fullname' => $post->user->full_name,
-                        'author_avatar' => $post->user->avatar_url,
-                    ];
-                });
+            if (!$userId) {
+                return $this->responseApi->dataNotFound();
+            }
 
-            return $this->responseApi->success($list_post);
+            $listMyPost = DB::table('users')
+                ->join('posts', 'users.id', '=', 'posts.user_id')
+                ->where('users.id', $userId)
+                ->select(
+                    'posts.id',
+                    'posts.user_id',
+                    'posts.caption',
+                    'posts.thumbnail_url',
+                    'posts.total_like',
+                    'posts.total_comment',
+                    'posts.created_at',
+                    'users.full_name as author_fullname',
+                    'users.avatar_url as author_avatar'
+                )
+                ->orderByDesc('posts.created_at')
+                ->get();
+
+            return $this->responseApi->success($listMyPost);
         } catch (\Throwable $th) {
             Log::error($th);
             return $this->responseApi->internalServerError();
         }
     }
 
+    /**
+     * Get all saved posts by user id.
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     *
+     * @throws \Throwable
+     */
     public function mySaved(Request $request)
     {
         try {
             $userId = Auth::id() ?? $request->user_id;
-            // $userId = 2; // test tạm nếu chưa dùng auth
+            if (!$userId) {
+                return $this->responseApi->dataNotFound();
+            }
 
-            // Lấy các post mà user đã favourite
-            $list_post = Post::whereHas('favourites', function ($q) use ($userId) {
-                $q->where('user_id', $userId);
-            })
-                ->with('user')
-                ->orderBy('created_at', 'desc')
-                ->get()
-                ->map(function ($post) {
-                    return [
-                        'id' => $post->id,
-                        'user_id' => $post->user_id,
-                        'caption' => $post->caption,
-                        'thumbnail_url' => $post->thumbnail_url,
-                        'total_like' => $post->total_like,
-                        'total_comment' => $post->total_comment,
-                        'created_at' => $post->created_at->format('Y-m-d H:i:s'),
-                        'author_fullname' => $post->user->full_name,
-                        'author_avatar' => $post->user->avatar_url,
-                    ];
-                });
+            $listMySaved = DB::table('users')
+                ->join('favourites', 'users.id', '=', 'favourites.user_id')
+                ->join('posts', 'favourites.post_id', '=', 'posts.id')
+                ->where('users.id', $userId)
+                ->select(
+                    'posts.id',
+                    'posts.user_id',
+                    'posts.caption',
+                    'posts.thumbnail_url',
+                    'posts.total_like',
+                    'posts.total_comment',
+                    'posts.created_at',
+                    'users.full_name as author_fullname',
+                    'users.avatar_url as author_avatar'
+                )
+                ->orderByDesc('posts.created_at')
+                ->get();
 
-            return $this->responseApi->success($list_post);
+            return $this->responseApi->success($listMySaved);
         } catch (\Throwable $th) {
             Log::error($th);
             return $this->responseApi->internalServerError();
         }
     }
 
-    public function explode(Request $request)
+    /**
+     * Explore all posts, sorted by total likes in descending order.
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     * 
+     * @throws \Throwable
+     */
+    public function explorePost(Request $request)
     {
         try {
-            $list_post = Post::join('users', 'users.id', '=', 'posts.user_id')
+            $listPostEplore = Post::join('users', 'users.id', '=', 'posts.user_id')
                 ->select(
                     'posts.id',
                     'posts.user_id',
@@ -292,33 +354,40 @@ class PostController extends Controller
                 ->orderBy('posts.total_like', 'desc')
                 ->get();
 
-            return $this->responseApi->success($list_post);
+            return $this->responseApi->success($listPostEplore);
         } catch (\Throwable $th) {
             Log::error($th);
             return $this->responseApi->internalServerError();
         }
     }
 
+    /**
+     * Comment on a post.
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     *
+     * @throws \Throwable
+     */
     public function comment(Request $request)
     {
         try {
             $userId = Auth::id() ?? $request->user_id;
-            // $userId = 2;
             $postId = $request->post_id;
             $comment = $request->comment;
-            $parent_id = $request->parent_id ?? null;
+            $parentId = $request->parent_id ?? null;
 
             Comment::create([
                 'user_id' => $userId,
                 'post_id' => $postId,
                 'comment' => $comment,
-                'parent_id' => $parent_id
+                'parent_id' => $parentId
             ]);
             return $this->responseApi->success([
                 'comment' => $comment,
                 'post_id' => $postId,
-                'parent_id' => $parent_id,
-                'message' => 'Comment successfully!'
+                'parent_id' => $parentId,
+                'message' => __('message.comment_successfully')
             ]);
         } catch (\Throwable $th) {
             Log::error($th);
@@ -326,6 +395,14 @@ class PostController extends Controller
         }
     }
 
+    /**
+     * Get all comments of a post with user information, sorted by created_at in descending order.
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\Response
+     *
+     * @throws \Throwable
+     */
     public function listComment(Request $request)
     {
         try {

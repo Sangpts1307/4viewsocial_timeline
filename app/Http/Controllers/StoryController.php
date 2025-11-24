@@ -14,11 +14,18 @@ use Illuminate\Support\Facades\Log;
 class StoryController extends Controller
 {
     private $responseApi;
+
     public function __construct(ResponseApi $responseApi)
     {
         $this->responseApi = $responseApi;
     }
 
+    /**
+     * Lấy danh sách stories của người mà user đang follow
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
     public function listStory(Request $request)
     {
         $param = $request->all();
@@ -33,40 +40,56 @@ class StoryController extends Controller
             ->join('users as friends', 'friends.id', '=', 'follows.following_id')
             ->where('stories.expired_time', '>', now())
             ->select(
-                'stories.*',         // tất cả thông tin story
-                'friends.user_name', // tên bạn bè
-                'friends.full_name'  // full_name nếu cần
+                'stories.*',
+                'friends.user_name',
+                'friends.full_name'
             )
             ->get();
         return $this->responseApi->success($stories);
     }
 
+    /**
+     * Add a new story
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     *
+     * @throws \Exception
+     */
     public function addStory(Request $request)
     {
-        try{
+        try {
             $param = $request->all();
-        $destinationPath = public_path('stories');
-        if (!file_exists($destinationPath)) {
-            mkdir($destinationPath, 0755, true);
-        }
+            $destinationPath = public_path('stories');
+            if (!file_exists($destinationPath)) {
+                mkdir($destinationPath, 0755, true);
+            }
 
-        // Lưu file video vào public/stories
-        $videoFile = $request->file('video');
-        $videoName = time() . '_' . $videoFile->getClientOriginalName();
-        $videoFile->move($destinationPath, $videoName);
+            // Lưu file video vào public/stories
+            $videoFile = $request->file('video');
+            $videoName = time() . '_' . $videoFile->getClientOriginalName();
+            $videoFile->move($destinationPath, $videoName);
 
-        Story::create([
-            'user_id' => $param['user_id'] ?? Auth::id(),
-            'video_url' => url('stories/' . $videoName),
-            'expired_time' => now()->addHours(24)
-        ]);
-        return $this->responseApi->success();
-        }catch(\Exception $e){
+            Story::create([
+                'user_id' => $param['user_id'] ?? Auth::id(),
+                'video_url' => url('stories/' . $videoName),
+                'expired_time' => now()->addHours(24)
+            ]);
+            return $this->responseApi->success();
+        } catch (\Exception $e) {
             Log::error($e);
             return $this->responseApi->BadRequest($e->getMessage());
         }
     }
 
+    /**
+     * Xóa story
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     *
+     * @throws \Exception
+     */
     public function deleteStory(Request $request)
     {
         try {

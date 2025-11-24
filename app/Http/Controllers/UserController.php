@@ -13,16 +13,23 @@ use Illuminate\Support\Facades\Log;
 class UserController extends Controller
 {
     private $responseApi;
+
     public function __construct()
     {
         $this->responseApi = new ResponseApi();
     }
 
+    /**
+     * Suggest friends for a user
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     * @throws \Throwable
+     */
     public function suggestFriend(Request $request)
     {
         try {
-            // $userId = Auth::id();
-            $userId = 2; // demo
+            $userId = Auth::id() ?? $request->user_id;
 
             // Danh sách ID người mà user đã follow
             $followedIds = Follow::where('user_id', $userId)
@@ -47,20 +54,26 @@ class UserController extends Controller
         }
     }
 
+    /**
+     * Function follow a user
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     * @throws \Throwable
+     */
     public function follow(Request $request)
     {
         try {
-            // $userId = Auth::id();
-            $userId = 3;
+            $userId = Auth::id() ?? $request->user_id;
             $followingId = $request->following_id;
 
-            // if ($userId == $followingId) {
-            //     return $this->responseApi->failed('Bạn không thể tự follow chính mình.');
-            // }
+            if ($userId == $followingId) {
+                return $this->responseApi->dataNotFound();
+            }
 
             $userToFollow = User::find($followingId);
             if (!$userToFollow) {
-                return $this->responseApi->dataNotFound('User not found', 404);
+                return $this->responseApi->dataNotFound();
             }
 
             // Kiểm tra đã follow chưa
@@ -73,7 +86,7 @@ class UserController extends Controller
                 $follow->delete();
 
                 return $this->responseApi->success([
-                    'message' => 'Unfollow successfully!'
+                    'message' => __('message.unfollow_successfully')
                 ]);
             }
 
@@ -84,7 +97,7 @@ class UserController extends Controller
             ]);
 
             return $this->responseApi->success([
-                'message' => 'Follow successfully!'
+                'message' => __('message.follow_successfully')
             ]);
         } catch (\Throwable $th) {
             Log::error($th);
@@ -92,12 +105,16 @@ class UserController extends Controller
         }
     }
 
+    /**
+     * Lấy thông tin người dùng
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     * @throws \Throwable
+     */
     public function getInfo(Request $request)
     {
         $param = $request->all();
         $userId = $param['user_id'] ?? Auth::id();
-        
-
     }
-
 }
