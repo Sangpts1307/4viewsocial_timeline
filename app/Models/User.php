@@ -19,7 +19,7 @@ class User extends Model
     protected $fillable = [
         'user_name', 'full_name', 'avatar_url', 'email', 'password',
         'facebook_url', 'thread_url', 'instagram_url', 'bio',
-        'role', 'online_status', 'status', 'login_fail', 'token'
+        'role', 'online_status', 'status', 'login_fail', 'token', 'device_token'
     ];
 
     public $timestamps = true;

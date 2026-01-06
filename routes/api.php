@@ -20,12 +20,32 @@ Route::post('follow', [App\Http\Controllers\UserController::class, 'follow']);
 Route::post('comment', [App\Http\Controllers\PostController::class, 'comment']);
 Route::get('list-comment', [App\Http\Controllers\PostController::class, 'listComment']);
 Route::get('list-story', [App\Http\Controllers\StoryController::class, 'listStory']);
+Route::post('like-story', [App\Http\Controllers\StoryController::class, 'likeStory']);
 Route::post('add-story', [App\Http\Controllers\StoryController::class, 'addStory']);
 Route::post('delete-story', [App\Http\Controllers\StoryController::class, 'deleteStory']);
 Route::get('get-info', [App\Http\Controllers\UserController::class, 'getInfo']);
+Route::get('notifications', [App\Http\Controllers\NotificationController::class, 'getNotifications']);
+Route::post('notifications/mark-read', [App\Http\Controllers\NotificationController::class, 'markAsRead']);
+Route::post('notifications/mark-read/{id}', [App\Http\Controllers\NotificationController::class, 'markAsReadSingle']);
+Route::post('set-device-token', [App\Http\Controllers\NotificationController::class, 'setDeviceToken']);
+Route::get('/explore', [App\Http\Controllers\PostController::class, 'explorePost']);
 
+Route::get('get-profile', [App\Http\Controllers\ProfileController::class, 'getProfile']);
+Route::get('get-post-user', [App\Http\Controllers\ProfileController::class, 'getPosts']);
+Route::get('get-post-saved', [App\Http\Controllers\ProfileController::class, 'getPostSaved']);
+Route::post('update-profile', [App\Http\Controllers\ProfileController::class, 'updateProfile']);
+Route::post('change-password', [App\Http\Controllers\ProfileController::class, 'changePassword']);
+
+Route::post('suggest-friend-message', [App\Http\Controllers\UserController::class, 'suggestFriendByKey']);
+Route::post('get-users-info', [App\Http\Controllers\UserController::class, 'getUsersInfo']);
+Route::post('search-user', [App\Http\Controllers\UserController::class, 'searchUser']);
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
+
+Route::group(['middleware' => 'auth:api'], function () {
+});
+ Route::post('add-story', [App\Http\Controllers\StoryController::class, 'addStory']);
+
 
 

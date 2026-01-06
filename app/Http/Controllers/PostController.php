@@ -7,10 +7,13 @@ use App\Models\Favourite;
 use App\Models\LikePost;
 use App\Models\Post;
 use App\Models\Comment;
+use App\Models\Notification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Services\FirebaseService;
+use App\Http\Controllers\NotificationController;
 
 class PostController extends Controller
 {
@@ -32,8 +35,22 @@ class PostController extends Controller
     public function listPost(Request $request)
     {
         try {
-            $param = $request->all();
-            $listPost = Post::join('users', 'users.id', '=', 'posts.user_id')
+            $userId = Auth::id() ?? $request->query('user_id');
+
+            $listPost = Post::leftJoin('users', 'users.id', '=', 'posts.user_id')
+
+                // JOIN LIKE
+                ->leftJoin('like_posts', function ($join) use ($userId) {
+                    $join->on('like_posts.post_id', '=', 'posts.id')
+                        ->where('like_posts.user_id', '=', $userId);
+                })
+
+                // JOIN FAVOURITES
+                ->leftJoin('favourites', function ($join) use ($userId) {
+                    $join->on('favourites.post_id', '=', 'posts.id')
+                        ->where('favourites.user_id', '=', $userId);
+                })
+
                 ->select(
                     'posts.id',
                     'posts.user_id',
@@ -43,11 +60,20 @@ class PostController extends Controller
                     'posts.total_comment',
                     'posts.created_at',
                     'users.full_name as author_fullname',
-                    'users.avatar_url as author_avatar'
+                    'users.avatar_url as author_avatar',
+
+                    // Has liked?
+                    \DB::raw("IF(like_posts.user_id IS NULL, 0, 1) as isLiked"),
+
+                    // Has favourited?
+                    \DB::raw("IF(favourites.user_id IS NULL, 0, 1) as isSaved")
                 )
+
                 ->orderBy('posts.created_at', 'desc')
                 ->get();
+
             return $this->responseApi->success($listPost);
+
         } catch (\Throwable $th) {
             Log::error($th);
             return $this->responseApi->internalServerError();
@@ -66,28 +92,35 @@ class PostController extends Controller
     {
         try {
             $param = $request->all();
-            $thumbnailUrl = null;
-            if ($request->hasFile('thumbnail')) {
-                // Lấy file
-                $file = $request->file('thumbnail');
-                // Tạo tên file
+            $mediaUrl = null;
+
+            // Kiểm tra file gửi lên (chấp nhận key là 'thumbnail' hoặc 'file')
+            $file = $request->file('thumbnail') ?? $request->file('file');
+
+            if ($file) {
+                // Lấy tên gốc và tạo tên file mới để tránh trùng
                 $filename = time() . '_' . $file->getClientOriginalName();
-                // Đường dẫn thư mục lưu
+                
+                // Đường dẫn lưu: public/uploads/posts
                 $path = public_path('uploads/posts');
+
                 // Tạo thư mục nếu chưa tồn tại
                 if (!file_exists($path)) {
-                    mkdir($path, 0777, true);
+                    mkdir($path, 0755, true);
                 }
-                // Lưu file vào thư mục
+
+                // Di chuyển file vào thư mục
                 $file->move($path, $filename);
-                // URL trả về
-                $thumbnailUrl = url('uploads/posts/' . $filename);
+
+                // Tạo URL đầy đủ
+                $mediaUrl = url('uploads/posts/' . $filename);
             }
+
             $createPost = Post::create([
-                // 'user_id' => $request->user_id,
-                'user_id' => Auth::user()->id ?? $param['user_id'],
+                // Ưu tiên lấy ID từ Auth (người dùng đang đăng nhập), nếu không có thì lấy từ request
+                'user_id' => \Auth::id() ?? $param['user_id'], 
                 'caption' => $request->caption ? $request->caption : '',
-                'thumbnail_url' => $thumbnailUrl ? $thumbnailUrl : null,
+                'thumbnail_url' => $mediaUrl, // Lưu URL của ảnh hoặc video
                 'total_like' => 0,
                 'total_comment' => 0
             ]);
@@ -96,8 +129,9 @@ class PostController extends Controller
                 'message' => __('message.post_saved_successfully'),
                 'post'    => $createPost
             ]);
+
         } catch (\Throwable $th) {
-            Log::error($th);
+            \Log::error($th);
             return $this->responseApi->internalServerError();
         }
     }
@@ -156,16 +190,21 @@ class PostController extends Controller
     public function likePost(Request $request)
     {
         try {
-            $userId = Auth::id() ?? $request->user_id;
-            $postId = $request->post_id;
+            $userId = Auth::id() ?? $request->input('user_id');
+            $postId = $request->input('post_id');
+
+            if (!$userId) {
+                return $this->responseApi->badRequest("Missing user_id");
+            }
+
             $post = Post::find($postId);
             if (!$post) {
                 return $this->responseApi->dataNotFound();
             }
 
             $like = LikePost::where('user_id', $userId)
-                ->where('post_id', $postId)
-                ->first();
+                            ->where('post_id', $postId)
+                            ->first();
 
             if ($like) {
                 $like->delete();
@@ -176,21 +215,40 @@ class PostController extends Controller
                     'message' => __('message.post_unliked_successfully'),
                     'total_like' => $post->total_like
                 ]);
-            } else {
-                // Nếu chưa like → tạo like mới
-                LikePost::create([
-                    'user_id' => $userId,
-                    'post_id' => $postId
-                ]);
-
-                $post->total_like += 1;
-                $post->save();
-
-                return $this->responseApi->success([
-                    'message' => __('message.post_liked_successfully'),
-                    'total_like' => $post->total_like
-                ]);
             }
+
+            LikePost::create([
+                'user_id' => $userId,
+                'post_id' => $postId
+            ]);
+
+            $post->total_like += 1;
+            $post->save();
+
+            if ($userId != $post->user_id) {
+                try {
+                    $noti = Notification::create([
+                        'user_id'  => $post->user_id,
+                        'actor_id' => $userId,
+                        'type'     => Notification::NOTI_LIKE_POST,
+                        'post_id'  => $postId,
+                        'content'  => 'đã thích bài viết của bạn.',
+                        'is_view'  => Notification::IS_NOT_VIEWED,
+                        'status'   => Notification::STATUS_WAIT
+                    ]);
+
+                    // Kích hoạt bắn ngay lập tức
+                    NotificationController::sendPushNow($noti);
+                } catch (\Throwable $th) {
+                    Log::error('Error creating notification for like post: ' . $th->getMessage());
+                }
+            }
+
+            return $this->responseApi->success([
+                'message' => __('message.post_liked_successfully'),
+                'total_like' => $post->total_like
+            ]);
+
         } catch (\Throwable $th) {
             Log::error($th);
             return $this->responseApi->internalServerError();
@@ -208,39 +266,41 @@ class PostController extends Controller
     public function savePost(Request $request)
     {
         try {
-            $userId = Auth::id() ?? $request->user_id;
-            $postId = $request->post_id;
+            $userId = Auth::id() ?? $request->input('user_id');
+            $postId = $request->input('post_id');
+
+            if (!$userId) {
+                return $this->responseApi->badRequest("Missing user_id");
+            }
 
             $post = Post::find($postId);
             if (!$post) {
                 return $this->responseApi->dataNotFound();
             }
 
-            // Kiểm tra user đã save chưa
             $favourite = Favourite::where('user_id', $userId)
                 ->where('post_id', $postId)
                 ->first();
 
             if ($favourite) {
-                // Nếu đã save → unsave
                 $favourite->delete();
 
                 return $this->responseApi->success([
                     'message' => __('message.post_removed_from_favourites'),
                     'saved' => false
                 ]);
-            } else {
-                // Nếu chưa save → tạo mới
-                Favourite::create([
-                    'user_id' => $userId,
-                    'post_id' => $postId
-                ]);
-
-                return $this->responseApi->success([
-                    'message' => __('message.post_saved'),
-                    'saved' => true
-                ]);
             }
+
+            Favourite::create([
+                'user_id' => $userId,
+                'post_id' => $postId
+            ]);
+
+            return $this->responseApi->success([
+                'message' => __('message.post_saved'),
+                'saved' => true
+            ]);
+
         } catch (\Throwable $th) {
             Log::error($th);
             return $this->responseApi->internalServerError();
@@ -372,24 +432,71 @@ class PostController extends Controller
     public function comment(Request $request)
     {
         try {
-            $userId = Auth::id() ?? $request->user_id;
-            $postId = $request->post_id;
-            $comment = $request->comment;
-            $parentId = $request->parent_id ?? null;
+            // Validate
+            $request->validate([
+                'post_id'   => 'required|integer|exists:posts,id',
+                'comment'   => 'required|string',
+                'parent_id' => 'nullable|integer|exists:comments,id'
+            ]);
 
-            Comment::create([
-                'user_id' => $userId,
-                'post_id' => $postId,
-                'comment' => $comment,
+            // Lấy user id: ưu tiên Auth, nếu không có dùng input
+            $userId = Auth::id() ?? $request->input('user_id');
+            if (!$userId) {
+                return $this->responseApi->badRequest('User not authenticated');
+            }
+
+            $postId   = $request->input('post_id');
+            $comment  = $request->input('comment');
+            $parentId = $request->input('parent_id') ?? null;
+
+            \DB::beginTransaction();
+
+            // Tạo comment
+            $newComment = Comment::create([
+                'user_id'   => $userId,
+                'post_id'   => $postId,
+                'comment'   => $comment,
                 'parent_id' => $parentId
             ]);
+
+            // Tăng total_comment trên posts (dùng increment cho an toàn)
+            $post = Post::find($postId);
+            if ($post) {
+                $post->increment('total_comment', 1);
+
+                // Chỉ gửi thông báo nếu người comment không phải là chủ bài viết
+                if ($userId != $post->user_id) {
+                    try {
+                        $noti = Notification::create([
+                            'user_id'  => $post->user_id, // Chủ bài viết nhận thông báo
+                            'actor_id' => $userId,       // Người bình luận là actor,
+                            'post_id'  => $postId,
+                            'type'     => Notification::NOTI_COMMENT, // Giá trị = 2 (theo Model của bạn)
+                            'content'  => 'đã bình luận về bài viết của bạn.',
+                            'is_view'  => Notification::IS_NOT_VIEWED,
+                            'status'   => Notification::STATUS_WAIT
+                        ]);
+                        // Kích hoạt bắn ngay lập tức
+                        NotificationController::sendPushNow($noti);
+                    } catch (\Throwable $th) {
+                        Log::error('Error creating notification for comment: ' . $th->getMessage());
+                    }
+                    
+                }
+            }
+
+            \DB::commit();
+
+            // Load user relation để FE render (và children nếu cần)
+            $newComment->load('user:id,full_name,user_name,avatar_url');
+
             return $this->responseApi->success([
-                'comment' => $comment,
-                'post_id' => $postId,
-                'parent_id' => $parentId,
+                'comment' => $newComment,
+                'total_comment' => $post ? $post->total_comment : null,
                 'message' => __('message.comment_successfully')
             ]);
         } catch (\Throwable $th) {
+            DB::rollBack();
             Log::error($th);
             return $this->responseApi->internalServerError();
         }

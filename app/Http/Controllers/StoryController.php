@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Helpers\ResponseApi;
+use App\Models\LikeStory;
+use App\Models\Notification;
 use App\Models\Story;
 use App\Models\User;
 
@@ -29,7 +31,7 @@ class StoryController extends Controller
     public function listStory(Request $request)
     {
         $param = $request->all();
-        $userId = Auth::id() ?? $param['user_id'];
+        $userId = $param['user_id'];
         $stories = DB::table('users')
             ->where('users.id', $userId)
             // Join bảng follow để biết user này follow ai
@@ -38,11 +40,18 @@ class StoryController extends Controller
             ->join('stories', 'follows.following_id', '=', 'stories.user_id')
             // Join bảng users nữa để lấy thông tin người bạn
             ->join('users as friends', 'friends.id', '=', 'follows.following_id')
+            ->leftJoin('like_stories', function ($join) use ($userId) {
+                $join->on('stories.id', '=', 'like_stories.story_id')
+                     ->where('like_stories.user_id', '=', $userId);
+            })
             ->where('stories.expired_time', '>', now())
             ->select(
                 'stories.*',
                 'friends.user_name',
-                'friends.full_name'
+                'friends.full_name',
+                'friends.avatar_url',
+                'like_stories.id as is_liked'
+
             )
             ->get();
         return $this->responseApi->success($stories);
@@ -60,18 +69,19 @@ class StoryController extends Controller
     {
         try {
             $param = $request->all();
+            $userId = $request->input('user_id');
             $destinationPath = public_path('stories');
             if (!file_exists($destinationPath)) {
                 mkdir($destinationPath, 0755, true);
             }
 
             // Lưu file video vào public/stories
-            $videoFile = $request->file('video');
+            $videoFile = $request->file('file');
             $videoName = time() . '_' . $videoFile->getClientOriginalName();
             $videoFile->move($destinationPath, $videoName);
 
             Story::create([
-                'user_id' => $param['user_id'] ?? Auth::id(),
+                'user_id' => $userId,
                 'video_url' => url('stories/' . $videoName),
                 'expired_time' => now()->addHours(24)
             ]);
@@ -80,6 +90,8 @@ class StoryController extends Controller
             Log::error($e);
             return $this->responseApi->BadRequest($e->getMessage());
         }
+        // $param = $request->input('user_id');
+       // return $this->responseApi->success($param);
     }
 
     /**
@@ -95,6 +107,58 @@ class StoryController extends Controller
         try {
             $param = $request->all();
             Story::where('id', $param['story_id'])->delete();
+            return $this->responseApi->success();
+        } catch (\Exception $e) {
+            return $this->responseApi->BadRequest($e->getMessage());
+        }
+    }
+
+
+    public function likeStory(Request $request)
+    {
+        try {
+            $param = $request->all();
+            $storyId = $param['story_id'];
+            $userId = $param['user_id'];
+            $isLiked = $param['is_liked'];
+
+            $story = Story::find($storyId);
+            if (!$story) {
+                return $this->responseApi->BadRequest('Story not found');
+            }
+
+            if ($isLiked) {
+                // Nếu đã like, thì bỏ like
+                LikeStory::create([
+                    'story_id' => $storyId,
+                    'user_id' => $userId
+                ]);
+
+                // Chỉ gửi nếu người like không phải chủ story
+                if ($userId != $story->user_id) {
+                    try {
+                        $noti = Notification::create([
+                            'user_id'  => $story->user_id, // Chủ story nhận thông báo
+                            'actor_id' => $userId,        // Người like,
+                            'story_id' => $storyId,
+                            'type'     => Notification::NOTI_LIKE_STORY, // Giá trị = 3
+                            'content'  => 'đã thích tin của bạn.',
+                            'is_view'  => Notification::IS_NOT_VIEWED,
+                            'status'   => Notification::STATUS_WAIT
+                        ]);
+                        // Gửi thông báo đẩy ngay
+                        NotificationController::sendPushNow($noti);
+                    } catch (\Exception $e) {
+                        Log::error('Error creating notification for like story: ' . $e->getMessage());
+                    }
+                }
+            } else {
+                // Nếu chưa like, thì thêm like
+                LikeStory::where('story_id', $storyId)
+                    ->where('user_id', $userId)
+                    ->delete();
+            }
+
             return $this->responseApi->success();
         } catch (\Exception $e) {
             return $this->responseApi->BadRequest($e->getMessage());

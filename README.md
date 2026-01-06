@@ -57,3 +57,13 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+
+<!-- Update 10/12 -->
+- Sửa function listPost, savePost, likePost
+- sửa function comment
+- sửa function follow trong usercontroller
+- sửa db: bảng notification (thêm trường type, post_id, story_id: phân biệt thông báo follow, like bài viết, hay nhắn tin)
+-> sửa function likePost, comment, likeStory, follow đều thêm lưu vào bảng noti
+- tạo controller notifications
+

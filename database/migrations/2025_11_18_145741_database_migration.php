@@ -26,6 +26,7 @@ return new class extends Migration {
             $table->integer('status')->default(0); // 0 sử dụng, 1 banned
             $table->integer('login_fail')->default(0);
             $table->string('token', 255)->nullable();
+            $table->text('device_token')->nullable();
         });
 
         /* POSTS */
