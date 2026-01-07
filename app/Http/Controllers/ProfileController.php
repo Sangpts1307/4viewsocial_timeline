@@ -153,7 +153,7 @@ public function getPostSaved(Request $request)
 
             // Lưu URL đầy đủ vào database
             // asset() sẽ tự động tạo URL dựa trên APP_URL trong file .env
-            $updateData['avatar_url'] = 'http://localhost:8004/'. 'uploads/avatars/' . $fileName;
+            $updateData['avatar_url'] = config('app.url'). '/uploads/avatars/' . $fileName;
         }
 
         // Cập nhật Database
